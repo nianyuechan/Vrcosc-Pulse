@@ -1,0 +1,17 @@
+# 统一按 LF 存入仓库，检出时由 Git 按平台处理
+* text=auto eol=lf
+
+# Windows 专用脚本保持 CRLF（当前无此类文件，留作约定）
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# 二进制 / 资源
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.ico binary
+*.dll binary
+*.exe binary
+
+# SVG 是文本，但不要做 diff 噪音处理
+*.svg text

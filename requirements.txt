@@ -1,0 +1,23 @@
+# 运行环境：Python >= 3.10（开发与验证使用 3.13）
+# 下限为 3.10 的原因：源码在未加 `from __future__ import annotations` 的模块中
+# 使用了 PEP 604 的联合注解（如 `def f(x: str | None = None)`），该写法在定义期
+# 求值，3.9 会直接 TypeError。
+# 注意：源码不得使用 PEP 701 的嵌套同引号 f-string（f"{ "a" if x else "b" }"），
+# 那是 CPython 3.12+ 才能解析的语法，会让 3.10/3.11 直接 SyntaxError。
+
+# 必需依赖
+PySide6>=6.5
+python-osc>=1.8
+
+# 可选：系统指标 / 硬件集成（缺失时功能优雅降级）
+psutil>=5.9
+pynvml>=11.5; platform_system == "Windows" or platform_system == "Linux"
+pywin32>=306; platform_system == "Windows"
+winsdk>=1.0; platform_system == "Windows"
+bleak>=0.21
+
+# 开发 / 测试（stdlib unittest 即可跑 tests/；pytest 可选）
+# pytest>=8.0
+
+# 可选：打包
+# pyinstaller>=6.0

@@ -496,6 +496,30 @@ class MainWindowRegressionTests(unittest.TestCase):
         ]
         self.assertEqual(targets, [20, 20, 20, 20])
 
+    def test_settings_sliders_reflect_current_appearance(self):
+        """外观滑条曾硬编码 14/28/16，从不回填实际生效值。"""
+        from app.dialogs.settings import SettingsDialog
+
+        window = self._new_window()
+        window.on_strength_change(20)
+        window.on_alpha_change(45)
+        window.on_radius_change(24)
+
+        dialog = SettingsDialog(window)
+        try:
+            self.assertEqual(dialog.sld_strength.value(), 20)
+            self.assertEqual(dialog.sld_alpha.value(), 45)
+            self.assertEqual(dialog.sld_radius.value(), 24)
+            self.assertEqual(dialog.lbl_strength.text(), "20")
+        finally:
+            dialog.close()
+            dialog.deleteLater()
+
+        # 构造对话框本身不得反向覆盖用户设置
+        self.assertEqual(window._current_blur_strength, 20)
+        self.assertEqual(window._current_white_alpha, 45)
+        self.assertEqual(window._current_corner_radius, 24)
+
 
 @unittest.skipUnless(_HAVE_QT, "PySide6 not available")
 class BackgroundCompositeTests(unittest.TestCase):

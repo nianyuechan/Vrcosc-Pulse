@@ -763,13 +763,27 @@ class SettingsDialog(QDialog):
             row.addWidget(value_label)
             return row
 
+        # 外观滑条必须回填「当前生效值」：此前一律硬编码 14/28/16，用户把模糊
+        # 设成 20 后重开对话框仍显示 14，界面与实际外观长期不一致。
+        # 注意 setValue 必须排在 connect 之前，否则构造对话框时就会触发
+        # on_*_change 反向覆盖用户设置。
+        def _current(attr: str, default: int) -> int:
+            try:
+                return int(getattr(self.main, attr, default))
+            except Exception:
+                return default
+
+        cur_strength = _current("_current_blur_strength", 14)
+        cur_alpha = _current("_current_white_alpha", 28)
+        cur_radius = _current("_current_corner_radius", 16)
+
         # 模糊强度
         self.sld_strength = QSlider(Qt.Horizontal)
         self.sld_strength.setRange(0, 40)
-        self.sld_strength.setValue(14)
+        self.sld_strength.setValue(cur_strength)
         self.sld_strength.setFixedWidth(210)
         self.sld_strength.valueChanged.connect(self.main.on_strength_change)
-        self.lbl_strength = self._value_pill("14")
+        self.lbl_strength = self._value_pill(str(cur_strength))
         self.sld_strength.valueChanged.connect(lambda v: self.lbl_strength.setText(str(v)))
         self.sld_strength.valueChanged.connect(lambda v: self.update_high_blur_hint())
         blur_card = self._wrap_card_layout(_slider_row("模糊强度", self.sld_strength, self.lbl_strength))
@@ -779,10 +793,10 @@ class SettingsDialog(QDialog):
         # 白色遮罩透明度
         self.sld_alpha = QSlider(Qt.Horizontal)
         self.sld_alpha.setRange(0, 100)
-        self.sld_alpha.setValue(28)
+        self.sld_alpha.setValue(cur_alpha)
         self.sld_alpha.setFixedWidth(210)
         self.sld_alpha.valueChanged.connect(self.main.on_alpha_change)
-        self.lbl_alpha = self._value_pill("28")
+        self.lbl_alpha = self._value_pill(str(cur_alpha))
         self.sld_alpha.valueChanged.connect(lambda v: self.lbl_alpha.setText(str(v)))
         self.sld_alpha.valueChanged.connect(lambda v: self.update_high_blur_hint())
         mask_card = self._wrap_card_layout(_slider_row("白色遮罩透明度", self.sld_alpha, self.lbl_alpha))
@@ -792,10 +806,10 @@ class SettingsDialog(QDialog):
         # 圆角半径
         self.sld_radius = QSlider(Qt.Horizontal)
         self.sld_radius.setRange(0, 32)
-        self.sld_radius.setValue(16)
+        self.sld_radius.setValue(cur_radius)
         self.sld_radius.setFixedWidth(210)
         self.sld_radius.valueChanged.connect(self.main.on_radius_change)
-        self.lbl_radius = self._value_pill("16")
+        self.lbl_radius = self._value_pill(str(cur_radius))
         self.sld_radius.valueChanged.connect(lambda v: self.lbl_radius.setText(str(v)))
         radius_card = self._wrap_card_layout(_slider_row("圆角半径", self.sld_radius, self.lbl_radius))
         radius_card.setFixedHeight(74)

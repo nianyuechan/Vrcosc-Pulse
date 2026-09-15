@@ -344,6 +344,260 @@ class MainWindowRegressionTests(unittest.TestCase):
         window.on_shadow_toggle(True, record=False)
         self.assertTrue(window.debug_panel.graphicsEffect().isEnabled())
 
+    def test_cross_thread_toggle_is_dispatched_to_gui_thread(self):
+        """非 GUI 线程调用 on_toggle_send() 必须被派发回主线程。
+
+        曾用两参 `QTimer.singleShot(0, self._on_toggle_send_main)`：定时器建在
+        「调用线程」，worker 线程没有事件循环时槽永不执行，`_toggle_pending`
+        永久卡在 True，此后所有跨线程切换都被静默丢弃；若调用线程有事件循环，
+        槽会在 worker 线程直接操作 Qt 控件并崩溃。
+        """
+        import threading
+
+        window = self._new_window()
+        window.input_edit.setPlainText("cross-thread")
+        window.on_text_changed()
+        with patch.object(window, "send_message", lambda: True):
+            thread = threading.Thread(target=window.on_toggle_send)
+            thread.start()
+            thread.join()
+            for _ in range(50):
+                QCoreApplication.processEvents()
+
+        self.assertFalse(
+            window._toggle_pending,
+            "跨线程调用后 _toggle_pending 必须被复位，否则通道永久锁死",
+        )
+        self.assertTrue(window.is_sending, "跨线程调用应当真的启动发送")
+        window.stop_sending()
+
+    def test_performance_mode_respects_disabled_shadow(self):
+        """性能模式只能「强制关闭」阴影，重新打开时必须尊重用户的投影偏好。"""
+        window = self._new_window()
+        window.on_shadow_toggle(False)          # 用户主动关闭投影
+        self.assertFalse(window._shadow_enabled)
+
+        window.set_performance_mode(True)
+        window.set_performance_mode(False)      # 曾经在这里被无条件重新打开
+        panels = (window.input_panel, window.history_panel,
+                  window.tool_panel, window.debug_panel)
+        self.assertEqual(
+            [p.graphicsEffect().isEnabled() for p in panels],
+            [False, False, False, False],
+            "用户已关闭的投影不得被性能模式开关重新打开",
+        )
+
+    def test_performance_mode_still_forces_shadow_off(self):
+        window = self._new_window()
+        window.on_shadow_toggle(True)
+        window.set_performance_mode(True)
+        panels = (window.input_panel, window.history_panel,
+                  window.tool_panel, window.debug_panel)
+        self.assertEqual(
+            [p.graphicsEffect().isEnabled() for p in panels],
+            [False, False, False, False],
+            "性能模式必须强制关闭阴影",
+        )
+
+    def test_tool_group_title_stylesheet_survives_luminance_change(self):
+        """亮度插值刷新次要文字颜色时，不得擦掉分组标题的粉色底与圆角。
+
+        setStyleSheet 是整体替换，而该刷新每帧都会跑。
+        """
+        window = self._new_window()
+        titles = getattr(window, "tool_group_titles", None) or []
+        self.assertTrue(titles, "应当存在工具面板分组标题")
+        window.apply_theme()
+        for value in (0.2, 0.5, 0.8, 1.0):
+            window.setWallpaperLightFactor(value)
+        sheet = titles[0].styleSheet()
+        self.assertIn("background-color", sheet, "分组标题的粉底规则被擦掉了")
+        self.assertIn("border-radius", sheet, "分组标题的圆角规则被擦掉了")
+
+    def test_countdown_label_keeps_font_size(self):
+        window = self._new_window()
+        window.apply_theme()
+        window.setWallpaperLightFactor(0.9)
+        self.assertIn(
+            "font-size", window.countdown_label.styleSheet(),
+            "倒计时标签的字号被亮度刷新擦掉了",
+        )
+
+    def test_button_press_animation_actually_runs(self):
+        """按下缩放动画曾被 GC（QPropertyAnimation 的第二个参数是属性名）。"""
+        import time
+
+        window = self._new_window()
+        button = window.start_btn
+        original = button.geometry()
+        window._btn_press(button)
+        for _ in range(40):
+            QCoreApplication.processEvents()
+            time.sleep(0.005)
+        pressed = button.geometry()
+        window._btn_release(button)
+        for _ in range(40):
+            QCoreApplication.processEvents()
+            time.sleep(0.005)
+
+        self.assertLess(
+            pressed.width(), original.width(),
+            "按下按钮应当缩小（动画对象不能被垃圾回收）",
+        )
+        self.assertGreater(
+            pressed.x(), 0,
+            "动画基准必须是实时几何，不能是首次布局前的脏值 (0,0)",
+        )
+        self.assertEqual(button.geometry(), original)
+
+    def test_hr_failure_status_is_not_success_green(self):
+        """BLE 连接/订阅失败曾被渲染成健康的绿色呼吸胶囊。"""
+
+        class _FakeMonitor:
+            def __init__(self, status):
+                self._status = status
+
+            def get_last_bpm(self):
+                return None
+
+            def get_status_text(self):
+                return self._status
+
+            def stop(self, *args, **kwargs):
+                pass
+
+        window = self._new_window()
+        window.auto_hr.setChecked(True)
+        warn = "#F03E75"
+        success = "#34B66A"
+        for status, expected in (
+            ("连接失败", warn),
+            ("bleak 不可用", warn),
+            ("订阅失败", warn),
+            ("已连接", success),
+        ):
+            window.hr_monitor = _FakeMonitor(status)
+            window.update_debug_info()
+            sheet = window.debug_labels["hr_status"].styleSheet()
+            self.assertIn(
+                expected, sheet,
+                f"状态 {status!r} 的胶囊配色不正确",
+            )
+
+    def test_blur_restores_user_setting_after_performance_mode(self):
+        """退出性能模式曾把模糊写死成 6，丢弃用户设定值。"""
+        window = self._new_window()
+        window.on_strength_change(20)
+        window.set_performance_mode(True)
+        window.set_performance_mode(False)
+        targets = [
+            p._blur_target for p in (window.input_panel, window.history_panel,
+                                     window.tool_panel, window.debug_panel)
+        ]
+        self.assertEqual(targets, [20, 20, 20, 20])
+
+
+@unittest.skipUnless(_HAVE_QT, "PySide6 not available")
+class BackgroundCompositeTests(unittest.TestCase):
+    """过渡合成曾把总不透明度恒定为 0.6，整窗背景在换壁纸时泛灰。"""
+
+    def _render(self, bg, t):
+        from PySide6.QtGui import QPainter
+        from PySide6.QtCore import QRect
+
+        canvas = QPixmap(64, 64)
+        canvas.fill(QColor(0, 0, 0))
+        painter = QPainter(canvas)
+        try:
+            bg._alpha = t
+            bg.render_into(painter, QRect(0, 0, 64, 64))
+        finally:
+            painter.end()
+        return canvas.toImage().pixelColor(32, 32)
+
+    def test_crossfade_never_reveals_background(self):
+        from app.ui.background import BackgroundManager
+
+        white = _pix("white", 64)
+        bg = BackgroundManager(None)
+        bg.set_current(white)
+        bg.start_transition(_pix("white", 64), 300)
+        self.assertTrue(bg.has_transition())
+
+        for t in (0.0, 0.25, 0.5, 0.75, 0.99):
+            color = self._render(bg, t)
+            self.assertEqual(
+                (color.red(), color.green(), color.blue()), (255, 255, 255),
+                f"alpha={t} 时透出了底色，说明交叉淡入淡出没有盖满窗口",
+            )
+
+    def test_crossfade_blends_the_two_wallpapers(self):
+        from app.ui.background import BackgroundManager
+
+        bg = BackgroundManager(None)
+        bg.set_current(_pix("red", 64))
+        bg.start_transition(_pix("blue", 64), 300)
+        mid = self._render(bg, 0.5)
+        self.assertEqual(mid.alpha(), 255, "过渡中点不得半透明")
+        self.assertGreater(mid.red(), 0, "中点应当仍含旧壁纸的红色分量")
+        self.assertGreater(mid.blue(), 0, "中点应当已含新壁纸的蓝色分量")
+
+
+@unittest.skipUnless(_HAVE_QT, "PySide6 not available")
+class BlurTargetTests(unittest.TestCase):
+    """模糊过渡曾把「动画中途的当前值」当成新目标，导致强度阶梯式衰减且不自愈；
+    另外 set_params() 不停掉运行中的动画，用户设置会被旧 endValue 静默覆盖。"""
+
+    def _panel(self, blur: int = 24):
+        from app.ui.panels import AcrylicPanel
+
+        panel = AcrylicPanel(_pix("red", 40), blur_strength=blur)
+        panel.static_blur_enabled = False
+        panel.resize(300, 200)
+        return panel
+
+    def _pump(self, ms: int) -> None:
+        import time
+
+        end = time.time() + ms / 1000.0
+        while time.time() < end:
+            QCoreApplication.processEvents()
+            time.sleep(0.005)
+
+    def test_repeated_wallpaper_changes_do_not_decay_blur(self):
+        panel = self._panel(24)
+        for color in ("blue", "green", "yellow", "cyan", "magenta", "gray"):
+            panel.wallpaper = _pix(color, 40)
+            panel.update_background()
+            self._pump(120)  # 在 300ms 过渡途中再次换壁纸
+        self._pump(400)      # 让最后一次过渡跑完
+        self.assertEqual(
+            panel.blur_strength, 24,
+            "连续换壁纸不得让模糊强度衰减（曾衰减到 1）",
+        )
+
+    def test_blur_target_tracks_user_intent(self):
+        panel = self._panel(24)
+        panel.wallpaper = _pix("blue", 40)
+        panel.update_background()
+        self._pump(120)
+        self.assertEqual(
+            panel._blur_target, 24,
+            "过渡期间意图值应保持 24，而不是被中途值污染",
+        )
+
+    def test_set_params_blur_overrides_running_transition(self):
+        panel = self._panel(24)
+        panel.wallpaper = _pix("blue", 40)
+        panel.update_background()   # 启动 0 -> 24 过渡
+        self._pump(60)
+        panel.set_params(blur_strength=40)
+        self._pump(600)             # 旧动画本会在此覆盖回 24
+        self.assertEqual(
+            panel.blur_strength, 40,
+            "显式设置的模糊强度必须取消运行中的过渡动画",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

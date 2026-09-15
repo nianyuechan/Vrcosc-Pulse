@@ -215,11 +215,16 @@ class WallpaperMixin:
             hr_key = getattr(self, "hr_key_label", None)
             if hr_key is not None:
                 hr_key.setStyleSheet(f"color: {secondary};")
-            for t in (getattr(self, "tool_group_titles", None) or []):
-                t.setStyleSheet(f"font-weight: 600; color: {secondary};")
+            # 分组标题条（tool_group_titles）刻意不在这里改：它由 apply_theme()
+            # 用整段规则维护「粉色底 + 圆角 + 品牌色文字」。setStyleSheet 是整体
+            # 替换，这里每次亮度插值都写一遍 font-weight/color 会把
+            # QWidget#toolGroupTitle 的背景与圆角规则擦掉，粉条永久变成裸文字
+            # （且标题本就不该用次要灰）。
             countdown = getattr(self, "countdown_label", None)
             if countdown is not None:
-                countdown.setStyleSheet(f"color: {secondary};")
+                # 必须写完整规则：只写 color 会连带擦掉 apply_theme 设定的
+                # font-size: 10px，字号退回继承的 14px。
+                countdown.setStyleSheet(f"font-size: 10px; color: {secondary};")
             # 亮度动画结束时立刻按新配色重画胶囊，避免等到下一次 1s tick。
             # 这里不主动调用 update_debug_info()：本方法在 MainWindow.__init__
             # 早期也会被调用，那时运行状态还没准备好。

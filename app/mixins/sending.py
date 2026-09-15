@@ -36,7 +36,14 @@ class SendingMixin:
                 # 非主线程来调用时，仅排入一次队列，避免重复排队导致竞态
                 if not getattr(self, "_toggle_pending", False):
                     self._toggle_pending = True
-                    QTimer.singleShot(0, self._on_toggle_send_main)
+                    # 必须用带 context 的三参重载。两参版本会把定时器建在「当前
+                    # 线程」，并不能把槽派发回 GUI 线程，于是：
+                    #   - 调用线程没有事件循环（普通 threading.Thread）→ 槽永不执行，
+                    #     _toggle_pending 卡在 True，此后再也无法跨线程切换发送状态；
+                    #   - 调用线程有事件循环（QThread + exec()）→ 槽在 worker 线程里
+                    #     直接操作 Qt 控件，触发 access violation（实测崩溃栈落在
+                    #     update_osc_preview → setPlainText）。
+                    QTimer.singleShot(0, self, self._on_toggle_send_main)
                 return
         except Exception:
             pass

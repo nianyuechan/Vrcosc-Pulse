@@ -1,5 +1,5 @@
 from typing import Optional
-from PySide6.QtCore import Qt, QSize, QRectF, QTimer, QPoint, QRect, Property, QPropertyAnimation, QEasingCurve
+from PySide6.QtCore import Qt, QSize, QRectF, QTimer, QPoint, QRect, Property, QPropertyAnimation, QEasingCurve, QAbstractAnimation
 from PySide6.QtGui import QPixmap, QImage, QPainter, QColor, QPainterPath
 from PySide6.QtWidgets import (
     QWidget,
@@ -75,6 +75,10 @@ class AcrylicPanel(QWidget):
         self._wallpaper_cache_key = int(wallpaper.cacheKey()) if hasattr(wallpaper, 'cacheKey') else 0
         # Blur animation (0 -> target over 300ms when wallpaper changes)
         self._blur_anim: Optional[QPropertyAnimation] = None
+        # 用户意图的模糊强度。必须与 blur_strength（动画每帧写入的当前值）区分开：
+        # 若把当前值当目标，过渡途中再次触发就会把中途值当成新目标，导致强度阶梯式
+        # 衰减（24→14→9→6…）且永不自愈。
+        self._blur_target: int = int(blur_strength)
         # White overlay alpha animation（亮度变化时的“润感”）
         self._white_anim: Optional[QPropertyAnimation] = None
         # Backbuffer for double-buffered drawing
@@ -188,7 +192,17 @@ class AcrylicPanel(QWidget):
         scrim_color: Optional[QColor] = None,
     ):
         if blur_strength is not None:
-            self.blur_strength = int(blur_strength)
+            value = int(blur_strength)
+            # 记录用户意图，并取消正在运行的过渡动画：动画对象是长期复用的，
+            # 若不停掉，它接下来每一帧仍会写 blurStrength，最终停在旧 endValue 上，
+            # 用户刚设的值会被静默覆盖（实测设为 40、600ms 后变回 24）。
+            self._blur_target = value
+            try:
+                if self._blur_anim is not None:
+                    self._blur_anim.stop()
+            except Exception:
+                pass
+            self.setBlurStrength(value)
         if white_alpha is not None:
             target = int(white_alpha)
             # 亮度变化时 white_alpha 采用 300ms 动画插值并轻微“闪润”
@@ -335,10 +349,21 @@ class AcrylicPanel(QWidget):
             if not self.static_blur_enabled:
                 try:
                     # Prepare animation from 0 -> current target over 300ms
-                    target_blur = int(self.blur_strength)
+                    # 目标取「用户意图值」而不是 blur_strength：后者是动画每帧写入的
+                    # 当前值，过渡途中再触发会读到中途值，造成强度持续衰减。
+                    target_blur = int(self._blur_target)
                     if self._blur_anim is None:
                         self._blur_anim = QPropertyAnimation(self, b"blurStrength")
                         self._blur_anim.setEasingCurve(QEasingCurve.OutCubic)
+                    # 已在向同一目标过渡时直接返回：避免每次换壁纸都从 0 重来
+                    # （那会造成闪烁，也会让连续 resize 反复重启过渡）。
+                    try:
+                        running = self._blur_anim.state() == QAbstractAnimation.State.Running
+                        end = int(self._blur_anim.endValue() or 0)
+                    except Exception:
+                        running, end = False, -1
+                    if running and end == target_blur:
+                        return
                     self._blur_anim.stop()
                     # Start from 0 for a glass-like live blur transition
                     self.setBlurStrength(0)
@@ -445,7 +470,10 @@ class AcrylicPanel(QWidget):
                 path = QPainterPath()
                 path.addRoundedRect(QRectF(rect.adjusted(0, 0, -1, -1)), self.corner_radius, self.corner_radius)
                 painter.setClipPath(path)
-                painter.drawPixmap(0, 0, self._final_pixmap)
+                # 按当前 rect 缩放绘制：_final_pixmap 可能还是 resize 前的尺寸
+                # （重绘由帧限制器推迟若干毫秒），直接 drawPixmap(0, 0, pix) 会
+                # 留下未绘制的空洞（实测 resize 后大面积 alpha=0）。
+                painter.drawPixmap(rect, self._final_pixmap, self._final_pixmap.rect())
                 # 额外 1px 内侧暗阴影，增强“凹陷”立体感
                 try:
                     w = self.window()

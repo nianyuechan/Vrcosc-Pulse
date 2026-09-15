@@ -308,4 +308,118 @@ the new preferences filename.
 - Suite total: 55 → **59 cases**, all passing; `compileall` clean; offscreen
   startup with plugin restore exits 0.
 
+## Bug-hunt pass (R9) — 12 defects, all reproduced before fixing
+
+Static analysis (`pyflakes`, plus a scripted sweep of the real user flows) and
+three parallel deep reads of the UI layer. Every defect below was reproduced with
+a script **before** the fix and re-run **after** it. Nothing is reported from
+static reasoning alone; two candidates that failed to reproduce were dropped.
+
+Severity order as reported by the reviewers.
+
+1. **Cross-thread send toggle either deadlocks or crashes** (`app/mixins/sending.py:39`)
+   — the guard used the two-arg `QTimer.singleShot(0, self._on_toggle_send_main)`.
+   That overload creates the timer in the *calling* thread, so it never dispatches
+   back to the GUI thread: from a plain `threading.Thread` the slot never runs and
+   `_toggle_pending` stays `True` forever, silently dropping every later
+   cross-thread request; from a `QThread` with an event loop the slot runs *in the
+   worker* and touches widgets, giving `access violation` (reproduced stack:
+   `update_osc_preview` → `setPlainText`). Now uses the context overload
+   `QTimer.singleShot(0, self, self._on_toggle_send_main)`. Verified: repeated
+   cross-thread toggles now start/stop correctly on the GUI thread.
+2. **Blur strength decayed to nothing and never recovered** (`app/ui/panels.py:338`)
+   — `update_background()` used `int(self.blur_strength)` as the animation target,
+   but that attribute is what the running animation writes every frame. A wallpaper
+   change mid-transition therefore adopted the *intermediate* value as the new
+   target: 24→14→9→6→4→2→1. Since `_deferred_resize()` re-applies the wallpaper on
+   every window resize, dragging the window killed the acrylic blur permanently.
+   Now a dedicated `_blur_target` holds the user's intent.
+3. **Explicit blur settings were overwritten by the running transition**
+   (`app/ui/panels.py:190`) — `set_params(blur_strength=…)` assigned the value but
+   never stopped `_blur_anim`, whose next ticks kept writing and finally parked the
+   property on the *old* `endValue`. Setting 40 ended up at 24 (measured); in the
+   real app, turning off performance mode or moving the blur slider within 300 ms
+   of a wallpaper change did nothing. `set_params` now stops the animation and
+   updates `_blur_target`.
+4. **Transition composite was always ~60 % opaque** (`app/ui/background.py:186`)
+   — the old image was drawn at `(1-t)` and the new at `t`. Because
+   `QPainter` composites sequentially, the result is `old*(1-t)² + new*t`, not a
+   linear crossfade, so the missing opacity exposed the window base colour for the
+   whole 300 ms. Measured: a pure-white wallpaper on a black base rendered
+   `rgb(118,118,118)` mid-transition. Now the old image is laid down opaque and the
+   new one is drawn at `t`, giving `new*t + old*(1-t)` — measured white at every
+   `t`. (A first attempt that only fixed the clear/blur ratio split was insufficient
+   and was corrected after measurement.)
+5. **Resize left large unpainted holes** (`app/ui/panels.py:473`) — `paintEvent`
+   drew `_final_pixmap` at `(0, 0)` without scaling. Repaints are deferred through
+   a frame limiter, so a paint usually arrives with a pixmap from the *previous*
+   size. Measured after 400×300 → 700×500: the region outside the stale pixmap had
+   `alpha=0`. Now drawn with `drawPixmap(rect, pixmap, pixmap.rect())`.
+6. **Performance mode re-enabled a shadow the user had switched off**
+   (`app/mixins/theme.py:588`) — it called `on_shadow_toggle(not enabled,
+   record=False)` unconditionally. `record=False` protects the *preference* field
+   but still forces the visual state, and `MainWindow.__init__` calls this on every
+   startup, so `shadow_enabled=False` on disk rendered with shadows on. Now gated on
+   `_shadow_enabled`; both directions verified.
+7. **Luminance refresh wiped the pink group-title bars**
+   (`app/mixins/wallpaper.py:218`) — `setStyleSheet` replaces wholesale, and this
+   method runs on every frame of the 300 ms luminance interpolation, so
+   `QWidget#toolGroupTitle { background-color; border-radius }` was destroyed and
+   the「常规 / 性能」bars became bare text (measured `#efefef` instead of
+   `#fff0f4`). Those titles are brand-coloured and owned by `apply_theme()`, so they
+   are no longer touched here. The countdown label still tracks the secondary grey,
+   but now writes the full rule so its `font-size: 10px` survives.
+8. **Long input silently dropped every addition, or split one in half**
+   (`app/core/composer.py:111`) — the final clip was a hard slice, so a 135-char
+   message plus CPU/RAM produced `"...\n[CPU: 42"` — an unclosed bracket sent to the
+   chatbox (and a 144-char message dropped all additions). `fit_within_limit()` now
+   keeps the raw text and appends only additions that fit whole.
+9. **Button press animation never ran** (`app/mixins/theme.py:536`) — the classic
+   PySide6 trap: the second argument of `QPropertyAnimation(target, b"geometry")` is
+   the *property name*, so with no parent the local `anim` was garbage-collected
+   before it could tick (measured: geometry unchanged on press). A parent is now
+   passed. This exposed a second, previously masked bug: `_btn_geo` was captured
+   before the first layout pass (`QRect(0,0,640,480)` while the button actually sat
+   at `(18,318,252,54)`), so merely fixing the reference would have teleported the
+   button to the top-left. The base geometry is now re-read on press.
+10. **Heart-rate failures rendered as healthy** (`app/mixins/debug.py:171`) — any
+    non-`None`-missing BPM got `SUCCESS` green plus the breathing dot, so
+    「连接失败」, 「订阅失败」and 「bleak 不可用」all looked like a working monitor.
+    Status is now classified: failure/unavailable → warning colour, no breathing;
+    connected-but-no-data → green with breathing.
+11. **Leaving performance mode discarded the user's blur setting**
+    (`app/mixins/theme.py:598`) — it restored a hard-coded `6` while the slider and
+    prefs said 14. Now restores `_current_blur_strength`.
+12. **`app/hr.py` used a deprecated asyncio entry point** (`app/hr.py:355`) —
+    `asyncio.get_event_loop()` in the standalone debug block emits
+    `DeprecationWarning: There is no current event loop` and becomes a
+    `RuntimeError` on Python 3.14. The block only throttles a print, so it uses
+    `time.sleep()`.
+
+### Not defects (investigated and dropped)
+- `utils/blur.py` caches by `QPixmap.cacheKey()`, which Qt may reuse — the
+  collision could not be reproduced (keys were monotonic across reuse attempts).
+- `@safe_metric("temps", default={})` shares one mutable default dict, but the
+  producer succeeded in every reachable path and no caller mutates the result.
+- `app/ui/animation.py` — the queue's `_running` flag, `submit()` trimming and
+  `_done()` re-entry were each verified and hold.
+- `MainWindow.hr_dot_anim` raises `RuntimeError` only when touched **after**
+  `app.exec()` returns; probed from inside the running event loop it is alive and
+  the breathing state machine works.
+
+### Added in the R9 pass
+- `tests/test_composer.py` — truncation never splits an addition across the whole
+  120–160 character range, a full-length raw message drops additions entirely, and
+  additions that do fit are kept whole.
+- `tests/test_regressions_ui.py` — cross-thread `on_toggle_send()` is dispatched to
+  the GUI thread and resets `_toggle_pending`; repeated wallpaper changes no longer
+  decay the blur target; `set_params` overrides a running transition; the
+  performance-mode/shadow preference round-trips in both directions; group-title and
+  countdown stylesheets survive luminance updates; the button press animation
+  actually shrinks the button without jumping to `(0,0)`; heart-rate failure
+  statuses are not success-green; the transition composite stays opaque and blends
+  both wallpapers; blur is restored after leaving performance mode.
+- Suite total: 59 → **76 cases**, all passing; `compileall` clean; offscreen startup
+  with plugin restore exits 0.
+
 

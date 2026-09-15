@@ -104,5 +104,56 @@ class ComposeFullMessageTests(unittest.TestCase):
         self.assertIn("\n", out)
 
 
+class TruncationTests(unittest.TestCase):
+    """截断不得把附加项切成半截（曾产生 "[CPU: 42" 这种残缺括号）。"""
+
+    @staticmethod
+    def _compose(n_chars: int):
+        with patch("app.core.composer.get_idle_seconds", return_value=0), \
+                patch("app.core.composer.get_active_window_title", return_value=None), \
+                patch("app.core.composer.get_smtc_info", return_value=None), \
+                patch("app.core.composer.get_cpu_usage", return_value=42.0), \
+                patch("app.core.composer.get_ram_usage", return_value=63.0), \
+                patch("app.core.composer.get_current_hr", return_value=None):
+            return compose_full_message(
+                "z" * n_chars,
+                wrap_newlines=True,
+                include_time=False,
+                include_window_title=False,
+                include_music=False,
+                include_idle=False,
+                include_cpu=True,
+                include_ram=True,
+                include_gpu=False,
+                include_temp=False,
+                include_hr=False,
+                max_len=144,
+            )
+
+    def test_truncation_never_splits_an_addition(self):
+        for n in range(120, 160):
+            out = self._compose(n)
+            self.assertLessEqual(len(out), 144)
+            self.assertEqual(
+                out.count("["), out.count("]"),
+                f"输入 {n} 字时产生了不配对的括号，尾部={out[n:]!r}",
+            )
+
+    def test_full_length_raw_drops_additions_entirely(self):
+        out = self._compose(144)
+        self.assertEqual(out, "z" * 144, "原文已占满上限时应只保留原文")
+
+    def test_outer_bracket_is_never_left_unclosed(self):
+        # 历史缺陷的精确形状：尾部出现 "[CPU: 42" —— 必须不复现
+        for n in (135, 140):
+            self.assertNotRegex(self._compose(n), r"\[(?:CPU|RAM)?:?\s*\d*$")
+
+    def test_additions_kept_whole_when_they_fit(self):
+        out = self._compose(5)
+        self.assertIn("CPU: 42%", out)
+        self.assertIn("RAM: 63%", out)
+        self.assertTrue(out.endswith("]"))
+
+
 if __name__ == "__main__":
     unittest.main()

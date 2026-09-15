@@ -180,39 +180,27 @@ class BackgroundManager(QObject):
             return
 
         t = float(self._alpha)
-        # 旧图：总透明度 (1 - t)
+        # 交叉淡入淡出必须这样叠加：旧图以「完全不透明」铺满作为底，再用不透明度 t
+        # 把新图盖上去，结果才是 new*t + old*(1-t)，全程盖满窗口。
+        #
+        # 反例（曾经的做法）：旧图按 (1-t)、新图按 t 顺序叠加，因为 source-over 是
+        # 依次覆盖，实际得到 old*(1-t)² + new*t，中段总不透明度掉到 ~0.6，整窗背景
+        # 会明显泛灰（实测纯白壁纸在纯黑底上渲染出 rgb(118,118,118)）。
         if self._old_wp and (not self._old_wp.isNull()):
             # 旧图模糊占比：随 t 递增（模糊先出）
             b_old = min(1.0, t * 1.2)
-            # 采用两层混合近似连续模糊变化：清晰层与模糊层占比随 b_old 互补
-            clear_ratio_old = (1.0 - b_old) * 0.6  # 清晰层最多占 60%
-            blur_ratio_old = b_old * 0.6          # 模糊层最多占 60%
-            base_opacity_old = (1.0 - t)
-
-            # 清晰旧图
-            if clear_ratio_old > 0.0:
-                painter.setOpacity(base_opacity_old * clear_ratio_old)
-                painter.drawPixmap(0, 0, self._old_wp)
-
-            # 模糊旧图（若有缓存）
-            if self._old_blur and (not self._old_blur.isNull()) and blur_ratio_old > 0.0:
-                painter.setOpacity(base_opacity_old * blur_ratio_old)
+            painter.setOpacity(1.0)
+            painter.drawPixmap(0, 0, self._old_wp)
+            # 模糊旧图叠加在清晰旧图之上，形成「逐渐糊掉」的退出效果
+            if self._old_blur and (not self._old_blur.isNull()) and b_old > 0.0:
+                painter.setOpacity(b_old)
                 painter.drawPixmap(0, 0, self._old_blur)
 
-        # 新图：总透明度 t
+        # 新图：交叉淡入（模糊起始较重，逐步转清晰）
         if self._new_wp and (not self._new_wp.isNull()):
-            # 新图模糊占比：起始较高，逐步递减（清晰再进）
             b_new = max(0.0, 1.0 - t * 1.2)
-            blur_ratio_new = b_new * 0.6
-            clear_ratio_new = (1.0 - b_new) * 0.6
-            base_opacity_new = t
-
-            # 模糊新图（若有缓存）
-            if self._new_blur and (not self._new_blur.isNull()) and blur_ratio_new > 0.0:
-                painter.setOpacity(base_opacity_new * blur_ratio_new)
+            painter.setOpacity(t)
+            painter.drawPixmap(0, 0, self._new_wp)
+            if self._new_blur and (not self._new_blur.isNull()) and b_new > 0.0:
+                painter.setOpacity(t * b_new)
                 painter.drawPixmap(0, 0, self._new_blur)
-
-            # 清晰新图
-            if clear_ratio_new > 0.0:
-                painter.setOpacity(base_opacity_new * clear_ratio_new)
-                painter.drawPixmap(0, 0, self._new_wp)

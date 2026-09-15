@@ -168,18 +168,27 @@ class DebugMixin:
                                 dot_color = "#FFC107"
                             else:
                                 dot_color = WARN
+                            pill_color = dot_color
                         else:
                             bpm_text = status or "等待数据…"
-                            dot_color = SUCCESS
-                            should_breathe = True
+                            # 失败/不可用不能画成成功绿 + 呼吸点：原来只要没有读数
+                            # 就一律 SUCCESS + 呼吸，于是「连接失败」「bleak 不可用」
+                            # 「订阅失败」都被渲染成健康的绿色呼吸胶囊，用户会以为
+                            # 心率一切正常。只有「已连接但暂时没有数据」才算等待中。
+                            if any(k in str(bpm_text) for k in ("失败", "不可用", "错误", "异常")):
+                                dot_color = WARN
+                                pill_color = WARN
+                                should_breathe = False
+                            else:
+                                dot_color = SUCCESS
+                                pill_color = SUCCESS
+                                should_breathe = True
                     else:
                         bpm_text = "未启用"
                         dot_color = secondary
+                        pill_color = secondary
                         should_breathe = False
-                    self._set_pill(
-                        'hr_status', bpm_text,
-                        dot_color if (bpm is not None or should_breathe) else secondary,
-                    )
+                    self._set_pill('hr_status', bpm_text, pill_color)
                 else:
                     self._set_pill('hr_status', "未启用", secondary)
                     dot_color = secondary

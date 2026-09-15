@@ -109,6 +109,26 @@ def compose_full_message(
         final = raw + wrap + wrap.join(additions)
 
     if max_len is not None and len(final) > max_len:
-        final = final[: max_len]
+        final = fit_within_limit(raw, additions, wrap, max_len)
     return final
+
+
+def fit_within_limit(raw: str, additions: list[str], wrap: str, max_len: int) -> str:
+    """把消息压进 ``max_len``，且不把附加项切成半截。
+
+    原来的实现是 ``final[:max_len]``，会把 ``[CPU: 42%, RAM: 63%]`` 切成
+    ``[CPU: 42`` 这种残缺括号直接发进聊天框。这里改为：
+
+    - 原文本身就超长：硬截断原文（自由文本，截断是预期行为）；
+    - 原文放得下：只保留「整体放得下」的附加项，放不下的整项丢弃。
+    """
+    if len(raw) >= max_len:
+        return raw[:max_len]
+    kept = raw
+    for add in additions:
+        candidate = kept + wrap + add
+        if len(candidate) > max_len:
+            break
+        kept = candidate
+    return kept
 

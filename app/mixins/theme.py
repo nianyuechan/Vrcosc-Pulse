@@ -521,6 +521,10 @@ class ThemeMixin:
     # 按钮按下动画
     def _btn_press(self, btn: QPushButton):
         try:
+            # 基准必须现取。_micro_button_setup 里记录的那份是在首次布局之前
+            # 采样的脏值（实测 QRect(0,0,640,480)，而按钮实际在 (18,318,252,54)），
+            # 一直沿用会让按钮在按下瞬间跳到左上角。
+            self._btn_geo[btn] = btn.geometry()
             self._animate_button_scale(btn, 0.97)
         except Exception:
             pass
@@ -544,7 +548,10 @@ class ThemeMixin:
         dx = (w - new_w) // 2
         dy = (h - new_h) // 2
         target = QRect(base.x() + dx, base.y() + dy, new_w, new_h)
-        anim = QPropertyAnimation(btn, b"geometry")
+        # parent 必须给（第三个参数）：QPropertyAnimation 的第二个参数是「属性名」，
+        # 若 parent 为 None，局部变量 anim 一返回就被 GC，动画一帧都不会跑
+        # （PySide6 经典坑）。挂到 btn 上让它活到动画结束。
+        anim = QPropertyAnimation(btn, b"geometry", btn)
         anim.setDuration(80)
         anim.setEasingCurve(QEasingCurve.InOutQuad)
         anim.setStartValue(btn.geometry())
@@ -584,8 +591,12 @@ class ThemeMixin:
     def set_performance_mode(self, enabled: bool):
         self.performance_mode = bool(enabled)
         try:
-            # 性能模式会临时关闭阴影，但不覆盖用户独立的“圆角投影”偏好
-            self.on_shadow_toggle(not enabled, record=False)
+            # 性能模式只负责「强制关闭」阴影。重新打开时必须尊重用户独立的
+            # 「圆角投影」偏好：原来无条件 on_shadow_toggle(not enabled)，于是
+            # 用户关掉的投影会在关闭性能模式时（以及每次启动调用本方法时）被
+            # 强行打开，而设置里仍显示为关闭。
+            desired_shadow = bool(getattr(self, "_shadow_enabled", True)) and not enabled
+            self.on_shadow_toggle(desired_shadow, record=False)
         except Exception:
             pass
         try:
@@ -595,10 +606,13 @@ class ThemeMixin:
                 self.tool_panel.set_params(blur_strength=0, white_alpha=0)
                 self.debug_panel.set_params(blur_strength=0, white_alpha=0)
             else:
-                self.input_panel.set_params(blur_strength=6, white_alpha=0)
-                self.history_panel.set_params(blur_strength=6, white_alpha=0)
-                self.tool_panel.set_params(blur_strength=6, white_alpha=0)
-                self.debug_panel.set_params(blur_strength=6, white_alpha=0)
+                # 退出性能模式应恢复「用户设定的」模糊强度。原来写死 6，
+                # 于是设置里显示 14、实际却是 6，用户的选择被静默丢弃。
+                restore = int(getattr(self, "_current_blur_strength", 6) or 0)
+                self.input_panel.set_params(blur_strength=restore, white_alpha=0)
+                self.history_panel.set_params(blur_strength=restore, white_alpha=0)
+                self.tool_panel.set_params(blur_strength=restore, white_alpha=0)
+                self.debug_panel.set_params(blur_strength=restore, white_alpha=0)
         except Exception:
             pass
         # 性能模式清零后，按壁纸亮度补回可读性遮罩

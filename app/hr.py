@@ -342,6 +342,13 @@ def get_status_text() -> str:
 
 if __name__ == "__main__":
     # 独立运行模式：打印最新 BPM（每秒），便于调试
+    #
+    # 这里用 time.sleep 而不是 asyncio.get_event_loop().run_until_complete(...)：
+    # 主线程并没有事件循环，get_event_loop() 在 CPython 3.12+ 已发出
+    # DeprecationWarning（"There is no current event loop"），并在 3.14 直接抛
+    # RuntimeError。本块只是节流打印，同步 sleep 语义相同且无废弃依赖。
+    import time as _time
+
     monitor = ensure_monitor_started()
     try:
         while True:
@@ -351,7 +358,6 @@ if __name__ == "__main__":
                 print(f"{bpm} bpm / {st}")
             else:
                 print(f"-- / {st}")
-            # 使用 asyncio.sleep 以避免阻塞事件循环（此处仅演示）
-            asyncio.get_event_loop().run_until_complete(asyncio.sleep(1.0))
+            _time.sleep(1.0)
     except KeyboardInterrupt:
         monitor.stop()

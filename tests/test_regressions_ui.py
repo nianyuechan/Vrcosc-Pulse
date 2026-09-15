@@ -520,6 +520,38 @@ class MainWindowRegressionTests(unittest.TestCase):
         self.assertEqual(window._current_white_alpha, 45)
         self.assertEqual(window._current_corner_radius, 24)
 
+    def test_startup_blur_matches_user_setting(self):
+        """启动曾用 per-panel 的 _default_blurs(24/18/12/6)，覆盖用户设定的模糊值。
+
+        该字典在 `set_performance_mode()` 之后被应用，把刚恢复的用户值又冲掉，
+        于是设置对话框显示 20、面板实际却是 24/18/12/6。
+        """
+        import json
+        import tempfile
+
+        from app.core import state
+        from app.main_window import MainWindow
+
+        tmpdir = tempfile.TemporaryDirectory()
+        self.addCleanup(tmpdir.cleanup)
+        prefs_file = os.path.join(tmpdir.name, state.PREFS_FILENAME)
+        with open(prefs_file, "w", encoding="utf-8") as f:
+            json.dump({"performance_mode": False, "blur_strength": 20}, f)
+
+        with patch.object(state, "_prefs_path", return_value=prefs_file), \
+                patch.object(MainWindow, "_probe_osc_async", lambda self, *a, **k: None):
+            window = MainWindow()
+        self.addCleanup(window.close)
+
+        targets = [
+            p._blur_target for p in (window.input_panel, window.history_panel,
+                                     window.tool_panel, window.debug_panel)
+        ]
+        self.assertEqual(
+            targets, [20, 20, 20, 20],
+            "启动时必须沿用用户设定的模糊强度，而不是 per-panel 默认值",
+        )
+
 
 @unittest.skipUnless(_HAVE_QT, "PySide6 not available")
 class BackgroundCompositeTests(unittest.TestCase):

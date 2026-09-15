@@ -305,12 +305,9 @@ class MainWindow(
         self.set_performance_mode(self.performance_mode)
         self.set_static_blur_enabled(self.static_blur)
 
-        self._default_blurs = {
-            'input': 24,
-            'history': 18,
-            'tool': 12,
-            'debug': 6,
-        }
+        # 已移除 _default_blurs（per-panel 24/18/12/6）：启动时它会覆盖
+        # set_performance_mode() 刚恢复的用户模糊值，使设置与渲染不一致。
+        # 外观现在统一由 _current_blur_strength 驱动。
 
         # Apply initial wallpaper immediately to avoid startup white/black screen
         try:

@@ -373,10 +373,16 @@ class WallpaperMixin:
             except Exception:
                 pass
             if not self.performance_mode:
-                self.input_panel.set_params(blur_strength=self._default_blurs['input'])
-                self.history_panel.set_params(blur_strength=self._default_blurs['history'])
-                self.tool_panel.set_params(blur_strength=self._default_blurs['tool'])
-                self.debug_panel.set_params(blur_strength=self._default_blurs['debug'])
+                # 必须用用户设定的模糊强度，而不是 per-panel 的 _default_blurs：
+                # 后者会在启动时覆盖掉 set_performance_mode(False) 刚刚恢复的用户值，
+                # 造成「设置对话框显示 20、面板实际却是 24/18/12/6」。on_strength_change
+                # / set_performance_mode / toggle_acrylic 三条路径都统一用一个值，
+                # 启动这条没有理由例外。
+                blur = int(getattr(self, "_current_blur_strength", 6) or 0)
+                self.input_panel.set_params(blur_strength=blur)
+                self.history_panel.set_params(blur_strength=blur)
+                self.tool_panel.set_params(blur_strength=blur)
+                self.debug_panel.set_params(blur_strength=blur)
             self.input_panel.update_background()
             self.history_panel.update_background()
             self.tool_panel.update_background()

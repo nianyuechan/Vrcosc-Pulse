@@ -422,4 +422,51 @@ Severity order as reported by the reviewers.
 - Suite total: 59 → **76 cases**, all passing; `compileall` clean; offscreen startup
   with plugin restore exits 0.
 
+## Bug-hunt pass (R9, continued) — appearance/settings cluster
+
+The third reviewer (settings dialog, layout, UI components) never returned and was
+stopped; those files were then reviewed directly. Three more defects, same rule:
+reproduced first, re-run after the fix.
+
+13. **Appearance sliders never reflected the real values** (`app/dialogs/settings.py:769`)
+    — the blur / white-alpha / corner-radius sliders were hard-coded to
+    `setValue(14/28/16)` and never read `_current_blur_strength` /
+    `_current_white_alpha` / `_current_corner_radius`. Measured: the user sets
+    `20 / 45 / 24`, reopens the dialog, and sees `14 / 28 / 16`. Now seeded from the
+    live values. The ordering constraint that keeps this safe — `setValue` must stay
+    *before* `valueChanged.connect`, otherwise building the dialog would immediately
+    call `on_strength_change` and overwrite the user's settings — is preserved and
+    asserted by a test.
+14. **Startup ignored the saved blur strength** (`app/mixins/wallpaper.py:371`) —
+    `_apply_initial_wallpaper()` applied the per-panel `_default_blurs`
+    (24/18/12/6) *after* `set_performance_mode()`, so it clobbered the user value the
+    latter had just restored. Measured with `performance_mode=False,
+    blur_strength=20`: panels rendered at `[24, 18, 12, 6]` while the dialog said 20.
+    `on_strength_change`, `set_performance_mode` and `toggle_acrylic` all use one
+    uniform `_current_blur_strength`, so startup was the odd one out; it now matches,
+    and the dead `_default_blurs` dict was removed.
+    **Visible behaviour change:** panels no longer differ in blur (24/18/12/6); all
+    four follow the single 「模糊强度」 slider (default 14).
+15. **High-blur hint never cleared** (`app/dialogs/settings.py:604`) —
+    `update_high_blur_hint()` only had a `strength >= 20` branch. Measured: raise
+    blur to 25 → hint appears; lower it to 5 → the hint is still on screen, now
+    claiming something untrue. Added the missing `else: clear()`.
+
+### Also fixed in this pass (test hygiene, not a product defect)
+`MainWindowRegressionTests._new_window()` cleaned up with `window.close()` only,
+which fires `closeEvent` but leaves the Qt object alive. After ten new cases were
+added to that class, the accumulated windows (each with its own timers and
+animations) slowed the event loop enough that the pre-existing
+`ToggleSwitchSyncTests` assertion — which waits `QTest.qWait(260)` for a 160 ms
+knob animation — read `knobPos == 0.0` and failed. The failure appeared **only**
+when the whole class ran: each new case paired individually with that test passed,
+so it is a cumulative-load effect, not a logic error. Cleanup now does
+`close() + deleteLater() + processEvents()`; the full suite passes twice in a row.
+
+### Added in this pass
+- `tests/test_regressions_ui.py` — appearance sliders report the live values and
+  building the dialog does not overwrite them; startup honours the saved blur
+  strength for all four panels; the high-blur hint clears when the blur is lowered.
+- Suite total: 76 → **79 cases**, all passing (run twice for determinism).
+
 

@@ -306,7 +306,19 @@ class MainWindowRegressionTests(unittest.TestCase):
         self.addCleanup(probe.stop)
 
         window = MainWindow()
-        self.addCleanup(window.close)
+
+        def _destroy_window():
+            # close() 只触发 closeEvent，Qt 对象本身仍存活；本类每个测试都会建
+            # 一个 MainWindow，若不真正销毁就会不断累积（各自带一批定时器与动画），
+            # 最终拖慢事件循环，使后续依赖 QTest.qWait 的动画断言变得不确定。
+            try:
+                window.close()
+                window.deleteLater()
+            except Exception:
+                pass
+            QCoreApplication.processEvents()
+
+        self.addCleanup(_destroy_window)
         return window
 
     def test_settings_dialog_does_not_accumulate(self):
@@ -551,6 +563,28 @@ class MainWindowRegressionTests(unittest.TestCase):
             targets, [20, 20, 20, 20],
             "启动时必须沿用用户设定的模糊强度，而不是 per-panel 默认值",
         )
+
+    def test_high_blur_hint_clears_when_blur_is_lowered(self):
+        """提示逻辑只有 strength >= 20 分支，把模糊调低后提示残留在界面上。"""
+        from app.dialogs.settings import SettingsDialog
+
+        window = self._new_window()
+        dialog = SettingsDialog(window)
+        try:
+            dialog.sld_strength.setValue(25)
+            dialog.sld_alpha.setValue(30)
+            self.assertTrue(
+                dialog.lbl_high_blur_hint.text(),
+                "高模糊时应当给出提示",
+            )
+            dialog.sld_strength.setValue(5)
+            self.assertEqual(
+                dialog.lbl_high_blur_hint.text(), "",
+                "模糊调低后提示必须清空，否则会残留一条不成立的假提示",
+            )
+        finally:
+            dialog.close()
+            dialog.deleteLater()
 
 
 @unittest.skipUnless(_HAVE_QT, "PySide6 not available")

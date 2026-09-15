@@ -606,6 +606,10 @@ class SettingsDialog(QDialog):
                 self.lbl_high_blur_hint.setText("提示：高模糊下建议降低白色遮罩，以避免发灰效果")
             else:
                 self.lbl_high_blur_hint.setText("提示：高模糊下可适当降低白色遮罩，提升通透感")
+        else:
+            # 必须清空：此前只有 strength >= 20 的分支，用户把模糊调回去后
+            # 提示仍留在界面上，变成一条已经不成立的假提示。
+            self.lbl_high_blur_hint.clear()
 
     def switch_page(self, index: int):
         """切换页面：清空滚动布局并添加目标页"""
